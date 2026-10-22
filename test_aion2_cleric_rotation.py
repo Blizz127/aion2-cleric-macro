@@ -899,3 +899,81 @@ def test_combat_on_keeps_a_running_scroll_timer(monkeypatch):
     assert "KEY_F5" not in scene.taps["after"]
     assert "KEY_F7" not in scene.taps["after"]
     assert scene.taps["after"][:2] == ["KEY_1", "KEY_2"]
+
+
+def _bar_image(width: int, height: int, *, rows: range, fill_to: int, left: int = 0) -> bytes:
+    pixels = bytearray(bytes((20, 20, 24)) * width * height)
+    for y in rows:
+        for x in range(left, fill_to):
+            offset = (y * width + x) * 3
+            pixels[offset : offset + 3] = bytes((200, 40, 40))
+    return bytes(pixels)
+
+
+def test_health_bar_is_located_by_its_red_band_not_a_fixed_row():
+    width, height = 150, 90
+    image = _bar_image(width, height, rows=range(40, 52), fill_to=150, left=7)
+
+    row, left = rotation.locate_health_bar(image, width, height)
+
+    assert 44 <= row <= 47
+    assert left == 7
+
+
+def test_health_bar_locator_ignores_stray_red_pixels_and_needs_a_band():
+    width, height = 150, 90
+    image = bytearray(_bar_image(width, height, rows=range(0, 0), fill_to=0))
+    for y in (10, 30, 70):
+        for x in range(0, 150):
+            image[(y * width + x) * 3 : (y * width + x) * 3 + 3] = bytes((200, 40, 40))
+
+    assert rotation.locate_health_bar(bytes(image), width, height) is None
+
+
+def test_health_fill_fraction_uses_the_fill_edge_and_never_reads_empty_as_zero():
+    width = 200
+    full = _bar_image(width, 3, rows=range(3), fill_to=200)
+    half = _bar_image(width, 3, rows=range(3), fill_to=100)
+    empty = _bar_image(width, 3, rows=range(3), fill_to=0)
+
+    assert rotation.health_fill_fraction(full, width, 3, 200) == pytest.approx(1.0)
+    assert rotation.health_fill_fraction(half, width, 3, 200) == pytest.approx(0.5)
+    assert rotation.health_fill_fraction(empty, width, 3, 200) is None
+
+
+def test_health_monitor_relocates_and_fails_closed_when_the_bar_moves(monkeypatch):
+    width, height = 1920, 1080
+    monitor = rotation.HealthMonitor.__new__(rotation.HealthMonitor)
+    monitor.window_id = "0x1"
+    monitor.width = width
+    monitor.height = height
+    monitor.bar_row = None
+    monitor.bar_left = None
+    monitor.bar_right = round(width / 2 - rotation.HealthMonitor.RIGHT_END_GAP * height)
+    screen = {"row": 965, "left": 702, "fill": 0.8}
+
+    def capture(window_id, left, top, w, h, *, resize_percent=100):
+        pixels = bytearray(bytes((20, 20, 24)) * w * h)
+        fill_end = screen["left"] + round((monitor.bar_right - screen["left"]) * screen["fill"])
+        for y in range(h):
+            if not (screen["row"] - 6 <= top + y <= screen["row"] + 5):
+                continue
+            for x in range(w):
+                if screen["left"] <= left + x < fill_end:
+                    offset = (y * w + x) * 3
+                    pixels[offset : offset + 3] = bytes((200, 40, 40))
+        return bytes(pixels)
+
+    monkeypatch.setattr(rotation, "capture_window_crop", capture)
+
+    assert monitor.read_health() == pytest.approx(0.8, abs=0.02)
+    assert monitor.bar_row == 965 or abs(monitor.bar_row - 965) <= 2
+    assert monitor.bar_left == 702
+
+    screen["row"] = 940  # HUD scale changed: the bar moved
+    screen["fill"] = 0.5
+    assert monitor.read_health() == pytest.approx(0.5, abs=0.02)
+
+    screen["fill"] = 0.0  # no red anywhere: unreadable, not 0% HP
+    with pytest.raises(OSError):
+        monitor.read_health()

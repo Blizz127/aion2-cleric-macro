@@ -384,8 +384,94 @@ class HudReader:
             thread.join(timeout=1.5)
 
 
+def _is_hp_red(red: int, green: int, blue: int) -> bool:
+    return red > 90 and red > green * 2.5 and red > blue * 2
+
+
+def locate_health_bar(
+    image: bytes, width: int, height: int
+) -> tuple[int, int] | None:
+    """Find the HP bar inside a search crop: (middle row, red run start).
+
+    The crop covers the left end of the bar. Rows whose left region is mostly
+    red belong to the bar; the middle one is returned together with the first
+    red column so the fill can be measured from the bar's true left edge.
+    """
+    if width <= 0 or height <= 0 or len(image) != width * height * 3:
+        return None
+    rows: list[tuple[int, int]] = []
+    for y in range(height):
+        first: int | None = None
+        reds = 0
+        for x in range(width):
+            offset = (y * width + x) * 3
+            if _is_hp_red(image[offset], image[offset + 1], image[offset + 2]):
+                reds += 1
+                if first is None:
+                    first = x
+        if first is not None and reds * 2 >= width - first:
+            rows.append((y, first))
+    if len(rows) < 3:
+        return None
+    # Take the longest contiguous band so stray red pixels cannot win.
+    best: list[tuple[int, int]] = []
+    current: list[tuple[int, int]] = []
+    for row in rows:
+        if current and row[0] != current[-1][0] + 1:
+            if len(current) > len(best):
+                best = current
+            current = []
+        current.append(row)
+    if len(current) > len(best):
+        best = current
+    if len(best) < 3:
+        return None
+    middle = best[len(best) // 2]
+    return middle[0], min(first for _, first in best)
+
+
+def health_fill_fraction(
+    image: bytes, width: int, height: int, bar_width: int
+) -> float | None:
+    """Fraction of the bar that is filled, from the rightmost red column.
+
+    The crop starts at the bar's left edge and spans `bar_width` columns (it
+    may be wider). Each row votes with its own rightmost red column; the
+    median wins so a slanted end cap or a stray pixel does not skew it. None
+    means no red at all, which is treated as unreadable rather than 0% HP.
+    """
+    if width <= 0 or height <= 0 or len(image) != width * height * 3:
+        return None
+    edges: list[int] = []
+    for y in range(height):
+        last: int | None = None
+        for x in range(width):
+            offset = (y * width + x) * 3
+            if _is_hp_red(image[offset], image[offset + 1], image[offset + 2]):
+                last = x
+        if last is not None:
+            edges.append(last)
+    if not edges:
+        return None
+    edges.sort()
+    edge = edges[len(edges) // 2]
+    return max(0.0, min(1.0, (edge + 1) / max(1, bar_width)))
+
+
 class HealthMonitor:
-    """Read Blizz's HUD health bar without touching game memory."""
+    """Read Blizz's HUD health bar without touching game memory.
+
+    The bar is located on the screen at the first read (and again whenever a
+    read finds no red), so window size, aspect ratio and HUD scale do not
+    matter. Only the game window is captured.
+    """
+
+    # The bar sits left of the centre emblem; these bound the search area.
+    SEARCH_LEFT = 0.33
+    SEARCH_RIGHT = 0.41
+    SEARCH_TOP = 0.85
+    SEARCH_BOTTOM = 0.94
+    RIGHT_END_GAP = 0.04  # bar right end = width/2 - gap * height
 
     def __init__(self, interval: float = 0.4, max_age: float = 2.0) -> None:
         self.interval = interval
@@ -413,29 +499,49 @@ class HealthMonitor:
             raise OSError("AION 2 window geometry could not be read")
         self.width = int(width_match.group(1))
         self.height = int(height_match.group(1))
-        self.left = round(self.width * 0.3633)
-        self.top = round(self.height * 0.89875)
-        self.sample_width = max(20, round(self.width * 0.1094))
+        self.bar_row: int | None = None
+        self.bar_left: int | None = None
+        self.bar_right = round(self.width / 2 - self.RIGHT_END_GAP * self.height)
         self.reader = HudReader(self.read_health, interval=interval, max_age=max_age)
 
+    def locate(self) -> bool:
+        """Find the bar's row and left edge; runs on the reader thread."""
+        left = round(self.width * self.SEARCH_LEFT)
+        top = round(self.height * self.SEARCH_TOP)
+        width = max(20, round(self.width * (self.SEARCH_RIGHT - self.SEARCH_LEFT)))
+        height = max(10, round(self.height * (self.SEARCH_BOTTOM - self.SEARCH_TOP)))
+        image = capture_window_crop(self.window_id, left, top, width, height)
+        found = locate_health_bar(image, width, height)
+        if found is None:
+            self.bar_row = None
+            self.bar_left = None
+            return False
+        self.bar_row = top + found[0]
+        self.bar_left = left + found[1]
+        return True
+
     def read_health(self) -> float:
-        """Capture and classify the HP strip; runs on the reader thread."""
+        """Capture the bar's middle rows and measure the fill (reader thread)."""
+        if self.bar_row is None and not self.locate():
+            raise OSError("AION 2 HP bar not found on screen")
+        assert self.bar_row is not None and self.bar_left is not None
+        bar_width = max(20, self.bar_right - self.bar_left)
         image = capture_window_crop(
-            self.window_id, self.left, self.top, self.sample_width, 3
+            self.window_id, self.bar_left, self.bar_row - 1, bar_width, 3
         )
-        red_columns = 0
-        columns = 0
-        for x in range(0, self.sample_width, max(1, self.sample_width // 56)):
-            votes = 0
-            for y in range(3):
-                offset = (y * self.sample_width + x) * 3
-                red, green, blue = image[offset : offset + 3]
-                votes += red > 90 and red > green * 2.5 and red > blue * 2
-            red_columns += votes >= 2
-            columns += 1
-        # The inset sample reads about 93% red at full health because of
-        # the HUD texture. Normalize that stable full-bar value to 100%.
-        return min(1.0, red_columns / max(1, columns) / 0.93)
+        fraction = health_fill_fraction(image, bar_width, 3, bar_width)
+        if fraction is None:
+            # The HUD moved, is hidden, or HP is empty: re-locate once and
+            # otherwise report unreadable instead of 0%.
+            if self.locate():
+                bar_width = max(20, self.bar_right - self.bar_left)
+                image = capture_window_crop(
+                    self.window_id, self.bar_left, self.bar_row - 1, bar_width, 3
+                )
+                fraction = health_fill_fraction(image, bar_width, 3, bar_width)
+            if fraction is None:
+                raise OSError("AION 2 HP bar unreadable")
+        return fraction
 
     def poll(self, now: float) -> float | None:
         value = self.reader.poll(now)

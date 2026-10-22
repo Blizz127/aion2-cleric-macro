@@ -51,7 +51,10 @@ Keys `5` through `8` are currently empty on Blizz and remain disabled. Their
 future damage actions are prepared in `cleric_personal.json`, but they must not
 be enabled until the matching skill is actually placed in the listed slot.
 
-The health reader captures only the visible HP strip from the verified AION 2
+The health reader finds the red HP bar on screen itself (left of the centre
+emblem) and re-finds it whenever a read sees no red, so window size, aspect
+ratio and HUD scale do not matter; a strip with no red reads as unreadable,
+never as 0% HP. It captures only that strip from the verified AION 2
 window every 400 ms. If the HUD cannot be read, or the last good read is older
 than two seconds, support actions remain idle; damage actions continue only
 when the target gate is confirmed. A second small HUD crop checks AION's
