@@ -1079,3 +1079,43 @@ def test_controls_command_rejects_identical_or_unknown_keys(monkeypatch):
     assert not engine.set_controls("KEY_NOPE", "KEY_F9")
     assert engine.set_controls("BTN_START", "BTN_SELECT")
     assert (engine.toggle_key, engine.panic_key) == ("BTN_START", "BTN_SELECT")
+
+
+def test_single_toggle_button_flips_combat_on_then_off(monkeypatch):
+    scene = _scene(monkeypatch, lambda _scene: None)
+    scene.engine = rotation.Engine(rotation.load_profile(PROFILE), 3, flip_key="KEY_F7")
+    scene.keyboard.press(rotation.e.KEY_F7)
+
+    def press_again(scene_: SimpleNamespace) -> None:
+        scene_.keyboard.press(rotation.e.KEY_F7)
+
+    scene_disturb = press_again
+    scene = _scene(monkeypatch, scene_disturb)
+    scene.engine = rotation.Engine(rotation.load_profile(PROFILE), 3, flip_key="KEY_F7")
+    scene.keyboard.press(rotation.e.KEY_F7)
+    with pytest.raises(_StopLoop):
+        scene.engine.run_session()
+
+    assert scene.engine.mode == "off"
+    assert scene.taps == {"before": [], "after": []}
+
+
+def test_single_toggle_button_turns_combat_on(monkeypatch):
+    scene = _scene(monkeypatch, lambda _scene: None)
+    scene.engine = rotation.Engine(rotation.load_profile(PROFILE), 3, flip_key="KEY_F7")
+    scene.keyboard.press(rotation.e.KEY_F7)
+    with pytest.raises(_StopLoop):
+        scene.engine.run_session()
+
+    assert scene.engine.mode == "on"
+    assert scene.taps["after"][:2] == ["KEY_F5", "KEY_F7"]
+
+
+def test_toggle_button_is_saved_and_loaded_with_the_other_controls(tmp_path):
+    path = tmp_path / "controls.json"
+    rotation.save_controls("KEY_F8", "KEY_F9", path, flip="KEY_F7")
+
+    assert rotation.load_controls(path) == ("KEY_F8", "KEY_F9")
+    assert rotation.load_flip_control(path) == "KEY_F7"
+    rotation.save_controls("KEY_F8", "KEY_F9", path)
+    assert rotation.load_flip_control(path) is None

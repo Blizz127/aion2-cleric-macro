@@ -1075,11 +1075,26 @@ def load_controls(path: Path = DEFAULT_CONTROLS_FILE) -> tuple[str, str]:
         return TOGGLE_KEY, PANIC_KEY
 
 
-def save_controls(on: str, off: str, path: Path = DEFAULT_CONTROLS_FILE) -> None:
-    path.write_text(
-        json.dumps({"combat_on": on, "combat_off": off}, indent=2) + "\n",
-        encoding="utf-8",
-    )
+def load_flip_control(path: Path = DEFAULT_CONTROLS_FILE) -> str | None:
+    """Optional single button that flips combat on/off (Legion Go Y1 = KEY_F7)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        name = data.get("combat_toggle")
+        if not name:
+            return None
+        resolve(str(name))
+        return str(name)
+    except (FileNotFoundError, ValueError, json.JSONDecodeError, AttributeError):
+        return None
+
+
+def save_controls(
+    on: str, off: str, path: Path = DEFAULT_CONTROLS_FILE, flip: str | None = None
+) -> None:
+    data: dict[str, str] = {"combat_on": on, "combat_off": off}
+    if flip:
+        data["combat_toggle"] = flip
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 class Listeners:
@@ -1226,6 +1241,7 @@ class Engine:
         report: Callable[[dict[str, object]], None] | None = None,
         toggle_key: str = TOGGLE_KEY,
         panic_key: str = PANIC_KEY,
+        flip_key: str | None = None,
     ) -> None:
         self.profile = profile
         self.level = level
@@ -1234,6 +1250,7 @@ class Engine:
         self.report = report
         self.toggle_key = toggle_key
         self.panic_key = panic_key
+        self.flip_key = flip_key
         self.learning: str | None = None
         self.devices: list[str] = []
         self.steps = active_steps(profile, level)
@@ -1277,6 +1294,7 @@ class Engine:
             "last_action": self.last_action,
             "toggle_key": self.toggle_key,
             "panic_key": self.panic_key,
+            "flip_key": self.flip_key,
             "learning": self.learning,
             "devices": list(self.devices),
         }
@@ -1294,6 +1312,7 @@ class Engine:
             health,
             self.toggle_key,
             self.panic_key,
+            self.flip_key,
             self.learning,
             tuple(self.devices),
         )
@@ -1333,6 +1352,16 @@ class Engine:
                 self.set_level(value)
             elif command == "controls" and isinstance(value, (tuple, list)):
                 self.set_controls(str(value[0]), str(value[1]))
+            elif command == "flip_key":
+                try:
+                    self.flip_key = str(value) if value else None
+                    if self.flip_key:
+                        resolve(self.flip_key)
+                    self.log(f"Combat toggle button: {self.flip_key or 'none'}")
+                except ValueError as exc:
+                    self.flip_key = None
+                    self.log(f"Ignored toggle button: {exc}")
+                self.publish()
             elif command == "learn":
                 self.learning = value if value in ("on", "off") else None
                 if self.learning:
@@ -1439,6 +1468,7 @@ class Engine:
                 self.publish()
             trigger = resolve(self.toggle_key)
             panic = resolve(self.panic_key)
+            flip = resolve(self.flip_key) if self.flip_key else None
             for key, _ in selector.select(timeout=timeout):
                 device = key.fileobj
                 try:
@@ -1466,7 +1496,12 @@ class Engine:
                         trigger = resolve(self.toggle_key)
                         panic = resolve(self.panic_key)
                         continue
-                    if event.code == panic:
+                    if flip is not None and event.code == flip:
+                        if combat:
+                            combat_off(f"{self.flip_key} toggle")
+                        else:
+                            combat_on(f"{self.flip_key} toggle")
+                    elif event.code == panic:
                         combat_off(f"{self.panic_key} stop key")
                     elif event.code == trigger:
                         combat_on(self.toggle_key)
@@ -1588,6 +1623,7 @@ def run(args: argparse.Namespace, profile: Profile) -> None:
         verbose=args.verbose,
         toggle_key=getattr(args, "on_key", TOGGLE_KEY),
         panic_key=getattr(args, "off_key", PANIC_KEY),
+        flip_key=getattr(args, "toggle_key", None),
     )
 
     def stop(*_: object) -> None:
@@ -1622,6 +1658,11 @@ def parse_args() -> argparse.Namespace:
         "--off-key",
         default=default_off,
         help="Linux input name for combat off, e.g. KEY_F9 or BTN_EAST",
+    )
+    parser.add_argument(
+        "--toggle-key",
+        default=load_flip_control(),
+        help="optional single button that flips combat on/off (Legion Go Y1 = KEY_F7)",
     )
     parser.add_argument(
         "--profile-file",

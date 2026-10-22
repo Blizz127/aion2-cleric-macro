@@ -82,8 +82,9 @@ controller button: pick one in the window, type a Linux input name, or click
 console helper reads the same file (`--on-key` / `--off-key` override it).
 Keyboards and controllers are opened read-only and re-scanned every 3 s, so a
 pad that connects after launch is picked up. Choose a button the game does
-not use, because the game still receives the press. This is the first step
-toward running the helper on the Legion Go 2 with controllers.
+not use, because the game still receives the press. An optional single **toggle** button flips combat on/off; on the Legion Go 2
+the Y1 wrapper presents Y1 as F7, so `controls.json` there sets
+`"combat_toggle": "KEY_F7"` (`--toggle-key` on the console helper).
 
 ## Run
 
