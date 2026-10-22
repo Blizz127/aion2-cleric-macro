@@ -43,6 +43,7 @@ UINPUT_NAME = "aion2-cleric-rotation"
 TOGGLE_KEY = "KEY_F8"
 PANIC_KEY = "KEY_F9"
 DEFAULT_PROFILE_FILE = Path(__file__).with_name("cleric_personal.json")
+DEFAULT_CONTROLS_FILE = Path(__file__).with_name("controls.json")
 MAX_LEVEL = 50
 DEFAULT_LEVEL = MAX_LEVEL
 IDLE_SLEEP = 0.010
@@ -1025,22 +1026,125 @@ def is_toggle_device(name: str) -> bool:
     )
 
 
-def open_listeners(wanted: set[int]) -> selectors.BaseSelector:
-    """Open toggle-capable real devices read-only without grabbing them."""
-    selector = selectors.DefaultSelector()
-    for path in evdev.list_devices():
-        try:
-            device = evdev.InputDevice(path)
-            keys = device.capabilities().get(e.EV_KEY, [])
-        except (PermissionError, OSError):
-            continue
-        if not is_toggle_device(device.name):
-            device.close()
-        elif wanted & set(keys):
-            selector.register(device, selectors.EVENT_READ)
-        else:
-            device.close()
-    return selector
+# Codes that mark a device worth listening to: keyboards (function keys) and
+# game controllers (face/shoulder/stick buttons, paddles).
+LISTEN_CODES = (
+    set(range(e.KEY_F1, e.KEY_F10 + 1))
+    | set(range(e.BTN_GAMEPAD, e.BTN_THUMBR + 1))
+    | set(range(e.BTN_TRIGGER_HAPPY1, e.BTN_TRIGGER_HAPPY40 + 1))
+)
+PREFERRED_NAMES = ("BTN_SOUTH", "BTN_EAST", "BTN_NORTH", "BTN_WEST")
+
+
+def is_listener_device(name: str, capabilities: dict[int, object]) -> bool:
+    """Accept physical keyboards and game controllers; reject injectors and mice."""
+    normalized = name.casefold()
+    if "virtual" in normalized or "ydotool" in normalized or name == UINPUT_NAME:
+        return False
+    if e.EV_REL in capabilities:
+        return False  # mice: constant motion events, never a trigger source
+    keys = capabilities.get(e.EV_KEY, [])
+    return bool(set(keys) & LISTEN_CODES)
+
+
+def code_name(code: int) -> str:
+    """Canonical Linux input name for a key or button code."""
+    names = e.keys.get(code) or e.BTN.get(code) or e.KEY.get(code)
+    if isinstance(names, (list, tuple)):
+        for preferred in PREFERRED_NAMES:
+            if preferred in names:
+                return preferred
+        return names[0]
+    if isinstance(names, str):
+        return names
+    return f"code {code}"
+
+
+def load_controls(path: Path = DEFAULT_CONTROLS_FILE) -> tuple[str, str]:
+    """Return (combat on, combat off) key names, defaulting to F8/F9."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        on = str(data.get("combat_on", TOGGLE_KEY))
+        off = str(data.get("combat_off", PANIC_KEY))
+        resolve(on)
+        resolve(off)
+        if on == off:
+            raise ValueError("combat_on and combat_off must differ")
+        return on, off
+    except (FileNotFoundError, ValueError, json.JSONDecodeError, AttributeError):
+        return TOGGLE_KEY, PANIC_KEY
+
+
+def save_controls(on: str, off: str, path: Path = DEFAULT_CONTROLS_FILE) -> None:
+    path.write_text(
+        json.dumps({"combat_on": on, "combat_off": off}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+class Listeners:
+    """Keyboards and controllers opened read-only, re-scanned for hotplug.
+
+    Nothing is grabbed, so the game still sees every press. Controllers that
+    connect after launch (a Legion Go 2 dock, a Bluetooth pad) are picked up
+    on the next scan.
+    """
+
+    RESCAN = 3.0
+
+    def __init__(self) -> None:
+        self.selector = selectors.DefaultSelector()
+        self.next_scan = 0.0
+        self.rescan(0.0, force=True)
+
+    def paths(self) -> set[str]:
+        return {key.fileobj.path for key in self.selector.get_map().values()}
+
+    def rescan(self, now: float, *, force: bool = False) -> int:
+        if not force and now < self.next_scan:
+            return 0
+        self.next_scan = now + self.RESCAN
+        known = self.paths()
+        added = 0
+        for path in evdev.list_devices():
+            if path in known:
+                continue
+            try:
+                device = evdev.InputDevice(path)
+                capabilities = device.capabilities()
+            except (PermissionError, OSError):
+                continue
+            if is_listener_device(device.name, capabilities):
+                self.selector.register(device, selectors.EVENT_READ)
+                added += 1
+            else:
+                device.close()
+        return added
+
+    def names(self) -> list[str]:
+        return [key.fileobj.name for key in self.selector.get_map().values()]
+
+    def get_map(self):  # noqa: ANN201 - selector-compatible
+        return self.selector.get_map()
+
+    def select(self, timeout: float | None = None):  # noqa: ANN201
+        return self.selector.select(timeout=timeout)
+
+    def unregister(self, device: object) -> None:
+        self.selector.unregister(device)
+
+    def close(self) -> None:
+        for key in list(self.selector.get_map().values()):
+            try:
+                key.fileobj.close()
+            except OSError:
+                pass
+        self.selector.close()
+
+
+def open_listeners(_wanted: set[int] | None = None) -> Listeners:
+    """Open every keyboard and controller the user can read."""
+    return Listeners()
 
 
 def print_devices() -> None:
@@ -1051,7 +1155,8 @@ def print_devices() -> None:
         except (PermissionError, OSError) as exc:
             print(f"{path}: <no access> ({exc})")
             continue
-        print(f"{path}: {device.name}")
+        listened = is_listener_device(device.name, device.capabilities())
+        print(f"{path}: {device.name}{'  [trigger source]' if listened else ''}")
         device.close()
 
 
@@ -1060,7 +1165,10 @@ def print_plan(args: argparse.Namespace, profile: Profile) -> list[Step]:
     print(f"Profile  : {profile.label}")
     print(f"Character: {profile.character}")
     print(f"Level    : {args.level}")
-    print(f"Keys     : {TOGGLE_KEY} combat on (stays on)   {PANIC_KEY} combat off")
+    print(
+        f"Keys     : {getattr(args, 'on_key', TOGGLE_KEY)} combat on (stays on)   "
+        f"{getattr(args, 'off_key', PANIC_KEY)} combat off"
+    )
     if args.dry_run:
         print("MODE     : dry run")
     print("\nActive solo rotation:")
@@ -1116,12 +1224,18 @@ class Engine:
         verbose: bool = False,
         log: Callable[[str], None] = print,
         report: Callable[[dict[str, object]], None] | None = None,
+        toggle_key: str = TOGGLE_KEY,
+        panic_key: str = PANIC_KEY,
     ) -> None:
         self.profile = profile
         self.level = level
         self.verbose = verbose
         self.log = log
         self.report = report
+        self.toggle_key = toggle_key
+        self.panic_key = panic_key
+        self.learning: str | None = None
+        self.devices: list[str] = []
         self.steps = active_steps(profile, level)
         self.commands: queue.SimpleQueue[tuple[str, object]] = queue.SimpleQueue()
         self.stopping = False
@@ -1133,8 +1247,25 @@ class Engine:
         self._published: tuple[object, ...] | None = None
 
     def post(self, command: str, value: object = None) -> None:
-        """Queue a window command: on, off, level, or quit."""
+        """Queue a window command: on, off, level, controls, learn, or quit."""
         self.commands.put((command, value))
+
+    def set_controls(self, on: str, off: str) -> bool:
+        """Change the combat on/off keys; names must be Linux input codes."""
+        try:
+            resolve(on)
+            resolve(off)
+        except ValueError as exc:
+            self.log(f"Ignored controls: {exc}")
+            return False
+        if on == off:
+            self.log("Ignored controls: on and off keys must differ")
+            return False
+        self.toggle_key = on
+        self.panic_key = off
+        self.log(f"Controls: {on} combat on, {off} combat off")
+        self.publish()
+        return True
 
     def snapshot(self) -> dict[str, object]:
         return {
@@ -1144,6 +1275,10 @@ class Engine:
             "targeted": self.targeted,
             "level": self.level,
             "last_action": self.last_action,
+            "toggle_key": self.toggle_key,
+            "panic_key": self.panic_key,
+            "learning": self.learning,
+            "devices": list(self.devices),
         }
 
     def publish(self) -> None:
@@ -1157,6 +1292,10 @@ class Engine:
             self.targeted,
             self.last_action,
             health,
+            self.toggle_key,
+            self.panic_key,
+            self.learning,
+            tuple(self.devices),
         )
         if signature != self._published:
             self._published = signature
@@ -1192,6 +1331,13 @@ class Engine:
                 self.stopping = True
             elif command == "level" and isinstance(value, int):
                 self.set_level(value)
+            elif command == "controls" and isinstance(value, (tuple, list)):
+                self.set_controls(str(value[0]), str(value[1]))
+            elif command == "learn":
+                self.learning = value if value in ("on", "off") else None
+                if self.learning:
+                    self.log(f"Press the key or button to use for combat {self.learning}")
+                self.publish()
             else:
                 pending.append((command, value))
 
@@ -1218,16 +1364,17 @@ class Engine:
 
     def run_session(self) -> None:
         """Drive one AION 2 session until the game exits or the helper stops."""
-        trigger = resolve(TOGGLE_KEY)
-        panic = resolve(PANIC_KEY)
         rng = random.SystemRandom()
         keys = {step.key for step in self.profile.steps if step.enabled}
         injector = Injector(keys | {TOGGLE_KEY, PANIC_KEY}, self.profile.timing, rng)
-        selector = open_listeners({trigger, panic})
+        selector = open_listeners({resolve(self.toggle_key), resolve(self.panic_key)})
         if not selector.get_map():
             injector.close()
             selector.close()
-            raise SetupError("No readable keyboard exposes F8/F9; run --list to inspect.")
+            raise SetupError(
+                "No readable keyboard or controller found; run --list to inspect."
+            )
+        self.devices = selector.names() if hasattr(selector, "names") else []
         try:
             health_monitor = HealthMonitor()
         except (OSError, subprocess.SubprocessError) as exc:
@@ -1285,6 +1432,13 @@ class Engine:
                     combat_on("window button")
                 elif command == "off":
                     combat_off("window STOP button")
+            rescan = getattr(selector, "rescan", None)
+            if rescan is not None and rescan(time.monotonic()):
+                self.devices = selector.names()
+                self.log("Input devices: " + ", ".join(self.devices))
+                self.publish()
+            trigger = resolve(self.toggle_key)
+            panic = resolve(self.panic_key)
             for key, _ in selector.select(timeout=timeout):
                 device = key.fileobj
                 try:
@@ -1300,10 +1454,22 @@ class Engine:
                         or not debouncer.accept(event.code, time.monotonic())
                     ):
                         continue
+                    if self.learning is not None:
+                        name = code_name(event.code)
+                        on, off = self.toggle_key, self.panic_key
+                        if self.learning == "on":
+                            on = name
+                        else:
+                            off = name
+                        self.learning = None
+                        self.set_controls(on, off)
+                        trigger = resolve(self.toggle_key)
+                        panic = resolve(self.panic_key)
+                        continue
                     if event.code == panic:
-                        combat_off("F9 stop key")
+                        combat_off(f"{self.panic_key} stop key")
                     elif event.code == trigger:
-                        combat_on("F8")
+                        combat_on(self.toggle_key)
 
         def poll_guard() -> str:
             nonlocal guard_state
@@ -1416,7 +1582,13 @@ def run(args: argparse.Namespace, profile: Profile) -> None:
     if not aion_process_running():
         raise SystemExit("AION 2 is not running; refusing to create an input device.")
 
-    engine = Engine(profile, args.level, verbose=args.verbose)
+    engine = Engine(
+        profile,
+        args.level,
+        verbose=args.verbose,
+        toggle_key=getattr(args, "on_key", TOGGLE_KEY),
+        panic_key=getattr(args, "off_key", PANIC_KEY),
+    )
 
     def stop(*_: object) -> None:
         engine.stopping = True
@@ -1440,6 +1612,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--verbose", action="store_true", help="log damage passes")
     parser.add_argument("--level", type=int, default=DEFAULT_LEVEL)
+    default_on, default_off = load_controls()
+    parser.add_argument(
+        "--on-key",
+        default=default_on,
+        help="Linux input name for combat on, e.g. KEY_F8 or BTN_SOUTH",
+    )
+    parser.add_argument(
+        "--off-key",
+        default=default_off,
+        help="Linux input name for combat off, e.g. KEY_F9 or BTN_EAST",
+    )
     parser.add_argument(
         "--profile-file",
         type=Path,
@@ -1462,6 +1645,13 @@ def main() -> None:
         raise SystemExit(
             f"--level must be between {profile.min_level} and {profile.max_level}"
         )
+    try:
+        resolve(args.on_key)
+        resolve(args.off_key)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if args.on_key == args.off_key:
+        raise SystemExit("--on-key and --off-key must differ")
     _instance_lock = None if args.dry_run else acquire_instance_lock()
     run(args, profile)
 

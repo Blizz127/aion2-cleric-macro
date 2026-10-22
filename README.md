@@ -74,6 +74,17 @@ Target selection, movement, quest choices, resurrection, and encounter
 mechanics remain manual. Select a hostile target normally; the armed helper
 will recognize whether AION accepts its next damage action.
 
+## Controller or keyboard triggers
+
+Combat ON and OFF default to F8 and F9 but can be any keyboard key or
+controller button: pick one in the window, type a Linux input name, or click
+**Learn…** and press the button. Choices are saved to `controls.json` and the
+console helper reads the same file (`--on-key` / `--off-key` override it).
+Keyboards and controllers are opened read-only and re-scanned every 3 s, so a
+pad that connects after launch is picked up. Choose a button the game does
+not use, because the game still receives the press. This is the first step
+toward running the helper on the Legion Go 2 with controllers.
+
 ## Run
 
 1. Open **AION 2 Cleric Rotation (F8)** from the application menu or desktop.

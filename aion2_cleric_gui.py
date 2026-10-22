@@ -18,6 +18,29 @@ BADGES = {
     "off": ("●  STOPPED", "#a9b5c5"),
     "waiting": ("●  WAITING FOR AION 2", "#8dacc1"),
 }
+# Offered in the control pickers; any other Linux input name can be typed.
+CONTROL_CHOICES = [
+    "KEY_F8", "KEY_F9", "KEY_F10", "KEY_F11", "KEY_F12",
+    "BTN_SOUTH", "BTN_EAST", "BTN_NORTH", "BTN_WEST",
+    "BTN_TL", "BTN_TR", "BTN_TL2", "BTN_TR2",
+    "BTN_SELECT", "BTN_START", "BTN_MODE", "BTN_THUMBL", "BTN_THUMBR",
+    "BTN_TRIGGER_HAPPY1", "BTN_TRIGGER_HAPPY2", "BTN_TRIGGER_HAPPY3", "BTN_TRIGGER_HAPPY4",
+]
+
+
+def pretty_control(name: str) -> str:
+    """Short human label for a key or button name."""
+    labels = {
+        "BTN_SOUTH": "A / Cross", "BTN_EAST": "B / Circle", "BTN_NORTH": "X / Triangle",
+        "BTN_WEST": "Y / Square", "BTN_TL": "LB", "BTN_TR": "RB", "BTN_TL2": "LT",
+        "BTN_TR2": "RT", "BTN_SELECT": "Select / View", "BTN_START": "Start / Menu",
+        "BTN_MODE": "Guide", "BTN_THUMBL": "L3", "BTN_THUMBR": "R3",
+    }
+    if name in labels:
+        return f"{labels[name]} ({name})"
+    if name.startswith("BTN_TRIGGER_HAPPY"):
+        return f"Paddle {name.removeprefix('BTN_TRIGGER_HAPPY')} ({name})"
+    return name.removeprefix("KEY_")
 
 
 def condition_text(step: rotation.Step) -> str:
@@ -44,6 +67,12 @@ def main() -> None:
         type=Path,
         help="render the window to a PNG without opening input devices",
     )
+    parser.add_argument(
+        "--controls-file",
+        type=Path,
+        default=rotation.DEFAULT_CONTROLS_FILE,
+        help="JSON with combat_on / combat_off input names (saved by the window)",
+    )
     args = parser.parse_args()
     try:
         profile = rotation.load_profile(args.profile_file)
@@ -54,12 +83,17 @@ def main() -> None:
             f"--level must be between {profile.min_level} and {profile.max_level}"
         )
     _instance_lock = None if args.gui_smoke_test else rotation.acquire_instance_lock()
-    run_gui(profile, args.level, args.gui_smoke_test)
+    run_gui(profile, args.level, args.gui_smoke_test, controls_file=args.controls_file)
 
 
 def run_gui(
-    profile: rotation.Profile, level: int, smoke_path: Path | None = None
+    profile: rotation.Profile,
+    level: int,
+    smoke_path: Path | None = None,
+    *,
+    controls_file: Path = rotation.DEFAULT_CONTROLS_FILE,
 ) -> None:
+    on_key, off_key = rotation.load_controls(controls_file)
     from PySide6.QtCore import QThread, QTimer, Signal
     from PySide6.QtGui import QColor
     from PySide6.QtWidgets import (
@@ -94,6 +128,8 @@ def run_gui(
                 verbose=True,
                 log=self.log,
                 report=self.state.emit,
+                toggle_key=on_key,
+                panic_key=off_key,
             )
 
         def log(self, line: str) -> None:
@@ -137,7 +173,8 @@ def run_gui(
             self.badge.setObjectName("state")
             banner_layout.addWidget(self.badge)
             banner_layout.addStretch()
-            banner_layout.addWidget(QLabel("F8  COMBAT ON     F9  COMBAT OFF"))
+            self.hint = QLabel()
+            banner_layout.addWidget(self.hint)
             layout.addWidget(banner)
 
             controls = QGridLayout()
@@ -168,6 +205,38 @@ def run_gui(
                 controls.addWidget(QLabel(label), 0, column)
                 controls.addWidget(widget, 1, column)
             layout.addLayout(controls)
+
+            # Combat on/off triggers: any keyboard key or controller button.
+            triggers = QGridLayout()
+            self.on_pick = QComboBox()
+            self.off_pick = QComboBox()
+            for pick in (self.on_pick, self.off_pick):
+                pick.setEditable(True)
+                for name in CONTROL_CHOICES:
+                    pick.addItem(pretty_control(name), name)
+            self.on_pick.setToolTip("Key or controller button that turns combat on (stays on).")
+            self.off_pick.setToolTip("Key or controller button that turns combat off.")
+            self.on_pick.currentIndexChanged.connect(lambda _i: self.controls_changed())
+            self.off_pick.currentIndexChanged.connect(lambda _i: self.controls_changed())
+            learn_on = QPushButton("Learn…")
+            learn_on.setToolTip("Press the key or controller button you want for Combat ON.")
+            learn_on.clicked.connect(lambda: self.post("learn", "on"))
+            learn_off = QPushButton("Learn…")
+            learn_off.setToolTip("Press the key or controller button you want for Combat OFF.")
+            learn_off.clicked.connect(lambda: self.post("learn", "off"))
+            self.devices = QLabel("no input devices opened yet")
+            self.devices.setObjectName("muted")
+            self.devices.setWordWrap(True)
+            triggers.addWidget(QLabel("Combat ON trigger"), 0, 0)
+            triggers.addWidget(self.on_pick, 1, 0)
+            triggers.addWidget(learn_on, 1, 1)
+            triggers.addWidget(QLabel("Combat OFF trigger"), 0, 2)
+            triggers.addWidget(self.off_pick, 1, 2)
+            triggers.addWidget(learn_off, 1, 3)
+            triggers.addWidget(self.devices, 2, 0, 1, 4)
+            triggers.setColumnStretch(0, 1)
+            triggers.setColumnStretch(2, 1)
+            layout.addLayout(triggers)
 
             self.tabs = QTabWidget()
             combat = QWidget()
@@ -204,14 +273,15 @@ def run_gui(
             tab_layout.addLayout(gauges)
 
             buttons = QHBoxLayout()
-            start = QPushButton("Combat ON  ·  F8")
-            start.setObjectName("primary")
-            start.clicked.connect(lambda: self.post("on"))
-            stop = QPushButton("STOP  ·  F9")
-            stop.setObjectName("stop")
-            stop.clicked.connect(lambda: self.post("off"))
-            buttons.addWidget(start)
-            buttons.addWidget(stop)
+            self.start = QPushButton()
+            self.start.setObjectName("primary")
+            self.start.clicked.connect(lambda: self.post("on"))
+            self.stop = QPushButton()
+            self.stop.setObjectName("stop")
+            self.stop.clicked.connect(lambda: self.post("off"))
+            buttons.addWidget(self.start)
+            buttons.addWidget(self.stop)
+            self.set_picks(on_key, off_key)
             tab_layout.addLayout(buttons)
             self.tabs.addTab(combat, "Combat")
 
@@ -226,7 +296,7 @@ def run_gui(
             layout.addWidget(self.tabs, 1)
 
             footer = QLabel(
-                "F8 turns persistent combat on  ·  F9 turns it off  ·  "
+                "The ON trigger turns persistent combat on  ·  the OFF trigger turns it off  ·  "
                 "Leaving AION 2 pauses input until you return  ·  Targeting stays manual"
             )
             footer.setWordWrap(True)
@@ -242,6 +312,10 @@ def run_gui(
                     "targeted": False,
                     "level": level,
                     "last_action": "",
+                    "toggle_key": on_key,
+                    "panic_key": off_key,
+                    "learning": None,
+                    "devices": [],
                 }
             )
             if smoke_path is None:
@@ -257,6 +331,33 @@ def run_gui(
         def level_changed(self, value: int) -> None:
             self.render_table(value)
             self.post("level", value)
+
+        def pick_value(self, pick) -> str:  # noqa: ANN001 - QComboBox
+            data = pick.currentData()
+            return str(data) if data else pick.currentText().strip()
+
+        def set_picks(self, on: str, off: str) -> None:
+            for pick, name in ((self.on_pick, on), (self.off_pick, off)):
+                pick.blockSignals(True)
+                index = pick.findData(name)
+                if index < 0:
+                    pick.addItem(pretty_control(name), name)
+                    index = pick.count() - 1
+                pick.setCurrentIndex(index)
+                pick.blockSignals(False)
+            self.hint.setText(
+                f"{pretty_control(on)}  COMBAT ON     {pretty_control(off)}  COMBAT OFF"
+            )
+            self.start.setText(f"Combat ON  ·  {pretty_control(on)}")
+            self.stop.setText(f"STOP  ·  {pretty_control(off)}")
+
+        def controls_changed(self) -> None:
+            on = self.pick_value(self.on_pick)
+            off = self.pick_value(self.off_pick)
+            if on and off and on != off:
+                self.post("controls", (on, off))
+                rotation.save_controls(on, off, controls_file)
+                self.set_picks(on, off)
 
         def render_table(self, current: int) -> None:
             # Active actions first in priority order; locked or empty slots last.
@@ -299,6 +400,20 @@ def run_gui(
             )
             if state["last_action"]:
                 self.detail.setText(f"Last action: {state['last_action']}")
+            on, off = str(state["toggle_key"]), str(state["panic_key"])
+            if (on, off) != (self.pick_value(self.on_pick), self.pick_value(self.off_pick)):
+                self.set_picks(on, off)
+                rotation.save_controls(on, off, controls_file)
+            learning = state.get("learning")
+            if learning:
+                self.status.setText(
+                    f"Press the key or controller button to use for COMBAT {str(learning).upper()}…"
+                )
+            devices = state.get("devices") or []
+            self.devices.setText(
+                "Listening on: " + ", ".join(str(d) for d in devices)
+                if devices else "No keyboard or controller opened yet; they are re-scanned every 3 s."
+            )
             current = int(state["level"])
             if current != self.level.value():
                 self.level.blockSignals(True)
@@ -365,6 +480,9 @@ F3 Return Scroll is never pressed. F6 Speed Scroll is left to the game's own aut
 
 ROTATION LEVEL
 Level 50 also presses reserved slots that are still locked, so new skills start working the moment they unlock. Set your current level to skip locked slots.
+
+CONTROLLER / LEGION GO
+Combat ON and OFF can be any keyboard key or controller button. Pick one from the lists, type a Linux input name, or click Learn… and press the button you want. Choose a button the game does not use (a back paddle, Select/View, or a trigger the game ignores), because the game still receives the press. Controllers that connect after launch are picked up within a few seconds; if Steam Input is wrapping the pad, pick the button on the pad Steam exposes. Choices are saved to controls.json next to the profile.
 
 LIMITS
 Targeting, movement, quests, resurrection, and encounter mechanics stay manual. The HP and target readings come from screen captures of the AION 2 window; game memory is never read. Key holds and gaps vary within fixed ranges. NC's operation policy allows sanctions for unauthorized programs; AION 2's built-in skill macro is the lower-risk route.

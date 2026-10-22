@@ -1004,3 +1004,78 @@ def test_runtime_guard_with_no_known_focus_treats_unknown_as_unfocused():
 def test_focus_probe_yields_unknown_while_a_capture_holds_the_x_lock():
     with rotation.X_LOCK:
         assert rotation.aion_window_focused() is None
+
+
+def test_listener_devices_are_keyboards_and_controllers_but_not_mice_or_injectors():
+    e = rotation.e
+    keyboard = {e.EV_KEY: [e.KEY_A, e.KEY_F8, e.KEY_F9]}
+    pad = {e.EV_KEY: [e.BTN_SOUTH, e.BTN_EAST, e.BTN_TR], e.EV_ABS: [(0, None)]}
+    mouse = {e.EV_KEY: [e.BTN_LEFT, e.BTN_RIGHT], e.EV_REL: [e.REL_X, e.REL_Y]}
+    paddles = {e.EV_KEY: [e.BTN_TRIGGER_HAPPY1, e.BTN_TRIGGER_HAPPY2]}
+
+    assert rotation.is_listener_device("AT Translated Set 2 keyboard", keyboard)
+    assert rotation.is_listener_device("Legion Go 2 Controller", pad)
+    assert rotation.is_listener_device("Legion Go 2 Paddles", paddles)
+    assert not rotation.is_listener_device("Logitech G502", mouse)
+    assert not rotation.is_listener_device("Microsoft X-Box 360 pad virtual", pad)
+    assert not rotation.is_listener_device(rotation.UINPUT_NAME, keyboard)
+    assert not rotation.is_listener_device("ydotoold virtual device", keyboard)
+
+
+def test_code_names_prefer_the_controller_face_button_aliases():
+    e = rotation.e
+
+    assert rotation.code_name(e.KEY_F8) == "KEY_F8"
+    assert rotation.code_name(e.BTN_SOUTH) == "BTN_SOUTH"
+    assert rotation.resolve(rotation.code_name(e.BTN_TRIGGER_HAPPY3)) == e.BTN_TRIGGER_HAPPY3
+
+
+def test_controls_file_round_trip_and_fallback(tmp_path):
+    path = tmp_path / "controls.json"
+
+    assert rotation.load_controls(path) == ("KEY_F8", "KEY_F9")
+    rotation.save_controls("BTN_TR2", "BTN_TL2", path)
+    assert rotation.load_controls(path) == ("BTN_TR2", "BTN_TL2")
+    path.write_text('{"combat_on": "KEY_F8", "combat_off": "KEY_F8"}')
+    assert rotation.load_controls(path) == ("KEY_F8", "KEY_F9")
+    path.write_text('{"combat_on": "NOT_A_KEY", "combat_off": "KEY_F9"}')
+    assert rotation.load_controls(path) == ("KEY_F8", "KEY_F9")
+
+
+def test_controller_button_turns_combat_on_and_off(monkeypatch):
+    scene = _scene(monkeypatch, lambda _scene: None)
+    scene.engine = rotation.Engine(
+        rotation.load_profile(PROFILE), 3, toggle_key="BTN_SOUTH", panic_key="BTN_EAST"
+    )
+    scene.keyboard.press(rotation.e.KEY_F8)  # old key: ignored now
+    scene.keyboard.press(rotation.e.BTN_SOUTH)
+    with pytest.raises(_StopLoop):
+        scene.engine.run_session()
+
+    assert scene.engine.mode == "on"
+    assert scene.taps["after"][:2] == ["KEY_F5", "KEY_F7"]
+
+
+def test_learn_mode_captures_the_next_press_without_starting_combat(monkeypatch):
+    scene = _scene(monkeypatch, lambda _scene: None)
+    scene.engine = rotation.Engine(rotation.load_profile(PROFILE), 3)
+    scene.engine.post("learn", "on")
+    scene.keyboard.press(rotation.e.BTN_TR2)
+    with pytest.raises(_StopLoop):
+        scene.engine.run_session()
+
+    assert scene.engine.toggle_key == "BTN_TR2"
+    assert scene.engine.panic_key == "KEY_F9"
+    assert scene.engine.learning is None
+    assert scene.engine.mode == "off"
+    assert scene.taps == {"before": [], "after": []}
+
+
+def test_controls_command_rejects_identical_or_unknown_keys(monkeypatch):
+    lines: list[str] = []
+    engine = rotation.Engine(rotation.load_profile(PROFILE), 3, log=lines.append)
+
+    assert not engine.set_controls("KEY_F8", "KEY_F8")
+    assert not engine.set_controls("KEY_NOPE", "KEY_F9")
+    assert engine.set_controls("BTN_START", "BTN_SELECT")
+    assert (engine.toggle_key, engine.panic_key) == ("BTN_START", "BTN_SELECT")
