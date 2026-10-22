@@ -90,30 +90,53 @@ class Profile:
     timing: Timing
 
 
+# One X client at a time: `import` captures and `xprop` focus probes must not
+# overlap, or a slow capture stalls the probe past its timeout and the guard
+# would read a focused game as unfocused.
+X_LOCK = threading.Lock()
+
+
 @dataclass
 class RuntimeGuard:
-    """Throttle expensive process/window checks while remaining fail-closed."""
+    """Throttle expensive process/window checks while remaining fail-closed.
+
+    `focused` may answer None when the window state could not be read right
+    now (probe busy or timed out). The last known answer is kept for up to
+    `unknown_grace` seconds; after that the guard fails closed to unfocused.
+    """
 
     interval: float = 0.2
+    unknown_grace: float = 2.0
     next_check: float = 0.0
+    last_focused: bool | None = None
+    unknown_since: float | None = None
 
     def reset(self) -> None:
         self.next_check = 0.0
+        self.last_focused = None
+        self.unknown_since = None
 
     def poll(
         self,
         now: float,
         process_running: Callable[[], bool],
-        focused: Callable[[], bool],
+        focused: Callable[[], bool | None],
     ) -> str:
         if now < self.next_check:
             return "cached"
         self.next_check = now + self.interval
         if not process_running():
             return "exited"
-        if not focused():
-            return "unfocused"
-        return "ok"
+        answer = focused()
+        if answer is None:
+            if self.unknown_since is None:
+                self.unknown_since = now
+            if self.last_focused is None or now - self.unknown_since > self.unknown_grace:
+                return "unfocused"
+            return "ok" if self.last_focused else "unfocused"
+        self.unknown_since = None
+        self.last_focused = answer
+        return "ok" if answer else "unfocused"
 
 
 @dataclass
@@ -142,22 +165,23 @@ def capture_window_crop(
 ) -> bytes:
     """Capture one small 8-bit RGB crop from the verified game window."""
     resize = [] if resize_percent == 100 else ["-resize", f"{resize_percent}%"]
-    image = subprocess.run(
-        [
-            "import",
-            "-window",
-            window_id,
-            "-crop",
-            f"{width}x{height}+{left}+{top}",
-            *resize,
-            "-depth",
-            "8",
-            "rgb:-",
-        ],
-        check=True,
-        capture_output=True,
-        timeout=1,
-    ).stdout
+    with X_LOCK:
+        image = subprocess.run(
+            [
+                "import",
+                "-window",
+                window_id,
+                "-crop",
+                f"{width}x{height}+{left}+{top}",
+                *resize,
+                "-depth",
+                "8",
+                "rgb:-",
+            ],
+            check=True,
+            capture_output=True,
+            timeout=2.5,
+        ).stdout
     output_width = (width * resize_percent + 99) // 100
     output_height = (height * resize_percent + 99) // 100
     if len(image) != output_width * output_height * 3:
@@ -815,8 +839,21 @@ def parse_window_properties(properties: str) -> tuple[str, str]:
     return ".".join(classes), titles[0] if titles else ""
 
 
-def active_window_identity() -> tuple[str, str]:
-    """Return the XWayland active window class and title, or empty strings."""
+def active_window_identity() -> tuple[str, str] | None:
+    """Return the XWayland active window class and title.
+
+    Empty strings mean no X window is active. None means the probe could not
+    run right now (a capture holds the X server, or xprop timed out).
+    """
+    if not X_LOCK.acquire(timeout=0.05):
+        return None
+    try:
+        return _active_window_identity_locked()
+    finally:
+        X_LOCK.release()
+
+
+def _active_window_identity_locked() -> tuple[str, str] | None:
     try:
         root_properties = subprocess.run(
             ["xprop", "-root", "_NET_ACTIVE_WINDOW"],
@@ -842,13 +879,21 @@ def active_window_identity() -> tuple[str, str]:
             text=True,
             timeout=1,
         ).stdout
-    except (FileNotFoundError, subprocess.SubprocessError):
+    except FileNotFoundError:
+        return "", ""
+    except subprocess.TimeoutExpired:
+        return None
+    except subprocess.SubprocessError:
         return "", ""
     return parse_window_properties(properties)
 
 
-def aion_window_focused() -> bool:
-    return is_aion_window_identity(*active_window_identity())
+def aion_window_focused() -> bool | None:
+    """True/False for the active window, None when it cannot be read now."""
+    identity = active_window_identity()
+    if identity is None:
+        return None
+    return is_aion_window_identity(*identity)
 
 
 def find_aion_window_id(windows: str) -> str | None:
@@ -876,12 +921,13 @@ def focus_aion_window() -> bool:
         window_id = find_aion_window_id(windows)
         if window_id is None:
             return False
-        subprocess.run(
-            ["wmctrl", "-ia", window_id],
-            check=True,
-            capture_output=True,
-            timeout=1,
-        )
+        with X_LOCK:
+            subprocess.run(
+                ["wmctrl", "-ia", window_id],
+                check=True,
+                capture_output=True,
+                timeout=1,
+            )
     except (FileNotFoundError, subprocess.SubprocessError):
         return False
 

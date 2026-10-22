@@ -977,3 +977,30 @@ def test_health_monitor_relocates_and_fails_closed_when_the_bar_moves(monkeypatc
     screen["fill"] = 0.0  # no red anywhere: unreadable, not 0% HP
     with pytest.raises(OSError):
         monitor.read_health()
+
+
+def test_runtime_guard_keeps_last_focus_through_a_brief_unknown_then_fails_closed():
+    guard = rotation.RuntimeGuard(interval=0.2, unknown_grace=2.0)
+    answers = iter([True, None, None, None, None, None, None, None, None, None, None, None])
+
+    def focused():
+        return next(answers)
+
+    assert guard.poll(10.0, lambda: True, focused) == "ok"
+    # Probe busy (a capture holds X): keep the last known answer.
+    assert guard.poll(10.2, lambda: True, focused) == "ok"
+    assert guard.poll(11.0, lambda: True, focused) == "ok"
+    assert guard.poll(12.0, lambda: True, focused) == "ok"
+    # Unknown for longer than the grace window: fail closed.
+    assert guard.poll(12.4, lambda: True, focused) == "unfocused"
+
+
+def test_runtime_guard_with_no_known_focus_treats_unknown_as_unfocused():
+    guard = rotation.RuntimeGuard(interval=0.2)
+
+    assert guard.poll(10.0, lambda: True, lambda: None) == "unfocused"
+
+
+def test_focus_probe_yields_unknown_while_a_capture_holds_the_x_lock():
+    with rotation.X_LOCK:
+        assert rotation.aion_window_focused() is None
