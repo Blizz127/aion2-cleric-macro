@@ -1,8 +1,9 @@
+#!/usr/bin/env xdg-open
 [Desktop Entry]
 Type=Application
 Name=AION 2 Cleric Rotation (F8)
-Comment=Level-3 Cleric damage helper; F8 toggle, F9 panic
-Exec=konsole --hold -e /home/blizz/Projects/aion2-cleric-macro/launch-aion2-cleric.sh
+Comment=Blizz Cleric solo assist; F8 combat on, F9 off
+Exec=/home/blizz/Projects/aion2-cleric-macro/launch-aion2-cleric.sh
 Icon=applications-games
 Terminal=false
 Categories=Game;

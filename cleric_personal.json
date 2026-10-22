@@ -1,0 +1,132 @@
+{
+  "label": "Blizz Cleric solo rotation",
+  "character": "Blizz",
+  "min_level": 1,
+  "max_level": 50,
+  "source": {
+    "status": "Default hotbar observed live on Blizz at level 3 on 2026-10-17; locked E, Q, 3, and 4 slots mapped by their visible levels and Cleric progression",
+    "client": "AION 2 Global 2.0.6.0 hotfix 1, Steam build 25800038",
+    "skills_url": "https://aion2data.com/classes/cleric",
+    "priority_url": "https://aion2data.com/macros/cleric"
+  },
+  "timing": {
+    "hold_min": 0.03,
+    "hold_max": 0.055,
+    "action_gap_min": 0.1,
+    "action_gap_max": 0.18
+  },
+  "steps": [
+    {
+      "name": "Emergency Health Potion",
+      "key": "KEY_X",
+      "role": "potion",
+      "health_below": 0.35,
+      "interval": 15.0,
+      "retry_jitter": 1.0,
+      "activation_level": 1,
+      "enabled": true
+    },
+    {
+      "name": "Radiant Recovery",
+      "key": "KEY_3",
+      "role": "heal",
+      "health_below": 0.55,
+      "interval": 12.0,
+      "retry_jitter": 0.5,
+      "activation_level": 12,
+      "enabled": true
+    },
+    {
+      "name": "Light of Regeneration",
+      "key": "KEY_Q",
+      "role": "heal",
+      "health_below": 0.75,
+      "interval": 30.0,
+      "retry_jitter": 0.8,
+      "activation_level": 7,
+      "enabled": true
+    },
+    {
+      "name": "Earth's Retribution",
+      "key": "KEY_1",
+      "role": "damage",
+      "interval": 0.7,
+      "retry_jitter": 0.12,
+      "activation_level": 1,
+      "enabled": true
+    },
+    {
+      "name": "Judgment Thunder",
+      "key": "KEY_2",
+      "role": "damage",
+      "interval": 0.7,
+      "retry_jitter": 0.12,
+      "activation_level": 1,
+      "enabled": true
+    },
+    {
+      "name": "Basic weapon attack",
+      "key": "BTN_LEFT",
+      "role": "damage",
+      "interval": 1.0,
+      "retry_jitter": 0.0,
+      "activation_level": 1,
+      "enabled": true
+    },
+    {
+      "name": "Divine Aura",
+      "key": "KEY_5",
+      "role": "damage",
+      "interval": 30.0,
+      "retry_jitter": 0.35,
+      "activation_level": 3,
+      "enabled": false
+    },
+    {
+      "name": "Chain of Torment",
+      "key": "KEY_E",
+      "role": "damage",
+      "interval": 20.0,
+      "retry_jitter": 0.3,
+      "activation_level": 4,
+      "enabled": true
+    },
+    {
+      "name": "Lightning Strike Scattershot",
+      "key": "KEY_6",
+      "role": "damage",
+      "interval": 0.7,
+      "retry_jitter": 0.12,
+      "activation_level": 5,
+      "enabled": false
+    },
+    {
+      "name": "Condemnation",
+      "key": "KEY_7",
+      "role": "damage",
+      "interval": 3.0,
+      "retry_jitter": 0.15,
+      "activation_level": 8,
+      "enabled": false
+    },
+    {
+      "name": "Debilitating Mark",
+      "key": "KEY_8",
+      "role": "damage",
+      "interval": 10.0,
+      "retry_jitter": 0.25,
+      "activation_level": 1,
+      "enabled": false
+    },
+    {
+      "name": "Bolt",
+      "key": "KEY_4",
+      "role": "damage",
+      "interval": 45.0,
+      "retry_jitter": 0.4,
+      "activation_level": 14,
+      "enabled": true
+    }
+  ],
+  "manual": "Target selection, movement, quest choices, resurrection, and encounter mechanics stay manual. Potion and learned heals are health-gated from the visible HUD."
+}
