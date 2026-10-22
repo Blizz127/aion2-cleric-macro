@@ -27,12 +27,25 @@ window's rotation level to your current level to skip them.
 | Key | Action | Opens | Automatic condition |
 | --- | --- | ---: | --- |
 | `X` | Emergency Health Potion | 1 | HP at or below 35% |
+| `F5` | Courage Scroll | 1 | fighting a confirmed target; once per 300 s |
+| `F7` | Benediction Scroll | 1 | fighting a confirmed target; once per 300 s |
 | `1` | Earth's Retribution | 1 | damage cooldown |
 | `2` | Judgment Thunder | 1 | damage cooldown |
+| left click | Basic weapon attack | 1 | damage cooldown |
+| right click | Heavy attack | 1 | damage cooldown |
 | `E` | Chain of Torment | 4 | damage cooldown |
 | `Q` | Light of Regeneration | 7 | HP at or below 75% |
 | `3` | Radiant Recovery | 12 | HP at or below 55%; supplies recovery and cleanse |
 | `4` | Bolt | 14 | damage cooldown |
+
+The hotbar was re-read live at level 8 on 2026-10-22. Scrolls were identified
+against the Fextralife scroll icons: `F3` holds the Return Scroll and is never
+pressed, and `F6` holds the Speed Scroll, which the game's own auto-use (the
+yellow tab on the slot) already keeps running, so the helper leaves it alone.
+Scroll timers survive F9/F8, so a buff that is still running is not re-applied
+on every combat toggle; they do restart when the helper itself is relaunched.
+`F1` holds a second red potion whose effect has not been confirmed, so its
+HP-25% step stays disabled in `cleric_personal.json` until it is.
 
 Keys `5` through `8` are currently empty on Blizz and remain disabled. Their
 future damage actions are prepared in `cleric_personal.json`, but they must not

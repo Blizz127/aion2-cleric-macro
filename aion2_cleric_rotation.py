@@ -591,11 +591,11 @@ def load_profile(path: Path) -> Profile:
         if not isinstance(name, str) or not name.strip():
             raise ValueError(f"steps[{index}].name must be a non-empty string")
         if not isinstance(key, str) or not re.fullmatch(
-            r"(?:KEY_(?:[1-8]|E|Q|X)|BTN_LEFT)", key
+            r"(?:KEY_(?:[1-8]|E|Q|X|F[1-8])|BTN_LEFT|BTN_RIGHT)", key
         ):
             raise ValueError(
                 f"steps[{index}].key must be KEY_1 through KEY_8, KEY_E, "
-                "KEY_Q, KEY_X, or BTN_LEFT"
+                "KEY_Q, KEY_X, KEY_F1 through KEY_F8, BTN_LEFT, or BTN_RIGHT"
             )
         if key in keys:
             raise ValueError(f"Duplicate hotbar key in profile: {key}")
@@ -609,8 +609,10 @@ def load_profile(path: Path) -> Profile:
         if not isinstance(enabled, bool):
             raise ValueError(f"steps[{index}].enabled must be true or false")
         role = item.get("role", "damage")
-        if role not in {"damage", "heal", "potion"}:
-            raise ValueError(f"steps[{index}].role must be damage, heal, or potion")
+        if role not in {"damage", "heal", "potion", "buff"}:
+            raise ValueError(
+                f"steps[{index}].role must be damage, heal, potion, or buff"
+            )
         health_value = item.get("health_below")
         health_below = None
         if health_value is not None:
@@ -619,9 +621,11 @@ def load_profile(path: Path) -> Profile:
             )
             if health_below > 1:
                 raise ValueError(f"steps[{index}].health_below cannot exceed 1")
-        if role == "damage" and health_below is not None:
-            raise ValueError(f"steps[{index}] damage actions cannot use health_below")
-        if role != "damage" and health_below is None:
+        if role in {"damage", "buff"} and health_below is not None:
+            raise ValueError(
+                f"steps[{index}] damage and buff actions cannot use health_below"
+            )
+        if role in {"heal", "potion"} and health_below is None:
             raise ValueError(f"steps[{index}] recovery actions require health_below")
         steps.append(
             Step(
@@ -793,7 +797,11 @@ def emit_due_steps(
     damage_allowed: bool = True,
     on_emit: Callable[[Step], None] | None = None,
 ) -> str:
-    """Emit one priority pass. Focus loss is fail-closed."""
+    """Emit one priority pass. Focus loss is fail-closed.
+
+    Damage and buff actions (scrolls, food) need a confirmed hostile target;
+    recovery actions follow the HP bar alone.
+    """
     if not focused:
         return "paused"
 
@@ -804,7 +812,7 @@ def emit_due_steps(
         for step in steps
         if now >= step.next_due
         and step.ready_for_health(health)
-        and (step.role != "damage" or damage_allowed)
+        and (step.role not in {"damage", "buff"} or damage_allowed)
     ]
     if not due:
         return "idle"
@@ -829,7 +837,7 @@ class Injector:
         self.timing = timing
         self.rng = rng
         capabilities = {e.EV_KEY: sorted(resolve(name) for name in code_names)}
-        if "BTN_LEFT" in code_names:
+        if any(name.startswith("BTN_") for name in code_names):
             # Relative axes allow libinput to classify the click source as a mouse.
             # We advertise them but never emit movement.
             capabilities[e.EV_REL] = [e.REL_X, e.REL_Y]
@@ -906,9 +914,12 @@ def print_plan(args: argparse.Namespace, profile: Profile) -> list[Step]:
     print("\nActive solo rotation:")
     for step in steps:
         retry_max = step.interval + step.retry_jitter
-        condition = (
-            f" below {step.health_below:.0%} HP" if step.health_below else ""
-        )
+        if step.health_below:
+            condition = f" below {step.health_below:.0%} HP"
+        elif step.role == "buff":
+            condition = " while fighting a confirmed target"
+        else:
+            condition = ""
         print(
             f"  + {step.name:<24} {step.key:<8} {step.role:<6} "
             f"retry {step.interval:g}-{retry_max:g}s{condition}"
@@ -1096,7 +1107,10 @@ class Engine:
             target_monitor.reset()
             self.targeted = False
             for step in self.steps:
-                step.next_due = 0.0
+                # Buff timers (scrolls) survive F9/F8 so a buff that is still
+                # running is not re-applied on every combat toggle.
+                if step.role != "buff":
+                    step.next_due = 0.0
             self.set_mode(
                 "on",
                 "Combat ON. Select a hostile target; F9 stops.",

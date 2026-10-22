@@ -11,7 +11,7 @@ from pathlib import Path
 import aion2_cleric_rotation as rotation
 
 
-ROLES = {"damage": "Damage", "heal": "Heal", "potion": "Potion"}
+ROLES = {"damage": "Damage", "heal": "Heal", "potion": "Potion", "buff": "Scroll"}
 BADGES = {
     "on": ("●  COMBAT ON", "#7addac"),
     "paused": ("●  PAUSED", "#f5ca72"),
@@ -25,6 +25,8 @@ def condition_text(step: rotation.Step) -> str:
         return "Off until the skill is on this key"
     if step.health_below is not None:
         return f"HP ≤ {step.health_below:.0%}"
+    if step.role == "buff":
+        return f"Fighting a locked target, once per {step.interval:g} s"
     return "Hostile target locked"
 
 
@@ -349,13 +351,17 @@ GUIDE = """QUICK START
 
 AUTOMATIC ACTIONS
 X  Emergency Health Potion: HP 35% or lower
+F5 Courage Scroll: while fighting a locked target, once per 300 s
+F7 Benediction Scroll: while fighting a locked target, once per 300 s
 1  Earth's Retribution: damage, hostile target
 2  Judgment Thunder: damage, hostile target
+Left click basic attack and right click heavy attack: damage, hostile target
 E  Chain of Torment (level 4): damage, hostile target
 Q  Light of Regeneration (level 7): HP 75% or lower
 3  Radiant Recovery (level 12): HP 55% or lower; recovery and cleanse
 4  Bolt (level 14): damage, hostile target
 Keys 5–8 stay off until their skills are placed on Blizz's hotbar.
+F3 Return Scroll is never pressed. F6 Speed Scroll is left to the game's own auto-use. F1 second potion stays off until its effect is confirmed.
 
 ROTATION LEVEL
 Level 50 also presses reserved slots that are still locked, so new skills start working the moment they unlock. Set your current level to skip locked slots.

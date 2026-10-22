@@ -31,18 +31,22 @@ def test_live_level_three_plan_uses_observed_damage_and_potion_slots():
 
     assert [(step.name, step.key) for step in rotation.active_steps(profile, 3)] == [
         ("Emergency Health Potion", "KEY_X"),
+        ("Courage Scroll", "KEY_F5"),
+        ("Benediction Scroll", "KEY_F7"),
         ("Earth's Retribution", "KEY_1"),
         ("Judgment Thunder", "KEY_2"),
         ("Basic weapon attack", "BTN_LEFT"),
+        ("Heavy attack (right click)", "BTN_RIGHT"),
     ]
 
 
 def test_automatic_recovery_actions_are_health_gated():
     profile = rotation.load_profile(PROFILE)
-    recovery = [step for step in profile.steps if step.role != "damage"]
+    recovery = [step for step in profile.steps if step.role in {"heal", "potion"}]
 
     assert {step.name for step in recovery} == {
         "Emergency Health Potion",
+        "Second potion (F1 slot)",
         "Light of Regeneration",
         "Radiant Recovery",
     }
@@ -62,9 +66,13 @@ def test_personal_profile_owns_a_dedicated_damage_bar():
         "KEY_7",
         "KEY_8",
         "BTN_LEFT",
+        "BTN_RIGHT",
         "KEY_E",
         "KEY_Q",
         "KEY_X",
+        "KEY_F1",
+        "KEY_F5",
+        "KEY_F7",
     }
 
 
@@ -73,6 +81,7 @@ def test_only_observed_or_reserved_default_slots_are_enabled():
 
     assert {step.key for step in profile.steps if step.enabled} == {
         "BTN_LEFT",
+        "BTN_RIGHT",
         "KEY_1",
         "KEY_2",
         "KEY_3",
@@ -80,7 +89,15 @@ def test_only_observed_or_reserved_default_slots_are_enabled():
         "KEY_E",
         "KEY_Q",
         "KEY_X",
+        "KEY_F5",
+        "KEY_F7",
     }
+
+
+def test_return_scroll_and_game_auto_used_speed_scroll_are_never_pressed():
+    profile = rotation.load_profile(PROFILE)
+
+    assert not {"KEY_F3", "KEY_F6"} & {step.key for step in profile.steps}
 
 
 def test_personal_profile_uses_blizz_hotbar_progression_and_base_cooldowns():
@@ -92,7 +109,11 @@ def test_personal_profile_uses_blizz_hotbar_progression_and_base_cooldowns():
     }
     assert configured == {
         "Basic weapon attack": ("BTN_LEFT", 1, 1.0),
+        "Heavy attack (right click)": ("BTN_RIGHT", 1, 1.0),
         "Emergency Health Potion": ("KEY_X", 1, 15.0),
+        "Second potion (F1 slot)": ("KEY_F1", 1, 15.0),
+        "Courage Scroll": ("KEY_F5", 1, 300.0),
+        "Benediction Scroll": ("KEY_F7", 1, 300.0),
         "Earth's Retribution": ("KEY_1", 1, 0.7),
         "Judgment Thunder": ("KEY_2", 1, 0.7),
         "Radiant Recovery": ("KEY_3", 12, 12.0),
@@ -111,11 +132,15 @@ def test_profile_starts_with_data_derived_pve_priority_order():
 
     assert [step.name for step in profile.steps] == [
         "Emergency Health Potion",
+        "Second potion (F1 slot)",
         "Radiant Recovery",
         "Light of Regeneration",
+        "Courage Scroll",
+        "Benediction Scroll",
         "Earth's Retribution",
         "Judgment Thunder",
         "Basic weapon attack",
+        "Heavy attack (right click)",
         "Divine Aura",
         "Chain of Torment",
         "Lightning Strike Scattershot",
@@ -444,7 +469,7 @@ def test_undisturbed_slow_hud_read_still_rotates_damage(monkeypatch):
     scene = _run_console(monkeypatch, lambda _scene: None)
 
     assert scene.taps["before"] == []
-    assert scene.taps["after"][:2] == ["KEY_1", "KEY_2"]
+    assert scene.taps["after"][:2] == ["KEY_F5", "KEY_F7"]
 
 
 def test_focus_lost_during_a_slow_hud_read_sends_no_key(monkeypatch):
@@ -471,7 +496,7 @@ def test_pressing_f8_again_keeps_combat_on(monkeypatch):
 
     scene = _run_console(monkeypatch, press_f8_again)
 
-    assert scene.taps["after"][:2] == ["KEY_1", "KEY_2"]
+    assert scene.taps["after"][:2] == ["KEY_F5", "KEY_F7"]
 
 
 def test_focus_return_resumes_combat_without_another_f8(monkeypatch):
@@ -481,7 +506,7 @@ def test_focus_return_resumes_combat_without_another_f8(monkeypatch):
 
     scene = _run_console(monkeypatch, alt_tab_for_one_second)
 
-    assert scene.taps["after"][:2] == ["KEY_1", "KEY_2"]
+    assert scene.taps["after"][:2] == ["KEY_F5", "KEY_F7"]
     assert scene.unfocused_taps == []
 
 
@@ -499,7 +524,7 @@ def test_f9_stays_off_when_focus_returns(monkeypatch):
 def test_window_combat_on_button_starts_the_rotation(monkeypatch):
     scene = _run_window(monkeypatch, lambda _scene: None)
 
-    assert scene.taps["after"][:2] == ["KEY_1", "KEY_2"]
+    assert scene.taps["after"][:2] == ["KEY_F5", "KEY_F7"]
     assert scene.engine.mode == "on"
 
 
@@ -536,7 +561,7 @@ def test_each_scheduler_pass_emits_at_most_one_skill():
 
     assert first == "emitted"
     assert second == "emitted"
-    assert taps == ["KEY_1", "KEY_2"]
+    assert taps == ["KEY_F5", "KEY_F7"]
 
 
 def test_scheduler_does_not_starve_later_damage_slots():
@@ -569,7 +594,7 @@ def test_healthy_character_skips_recovery_actions():
         jitter=lambda _: 0.0,
     )
 
-    assert taps == ["KEY_1"]
+    assert taps == ["KEY_F5"]
 
 
 def test_critical_health_prioritizes_emergency_potion():
@@ -822,3 +847,55 @@ def test_profile_timing_is_tight_but_still_humanized():
 
     assert 0.02 <= profile.timing.hold_min < profile.timing.hold_max <= 0.08
     assert 0.08 <= profile.timing.action_gap_min < profile.timing.action_gap_max <= 0.2
+
+
+def test_scrolls_wait_for_a_confirmed_hostile_target():
+    taps: list[str] = []
+    steps = rotation.active_steps(rotation.load_profile(PROFILE), level=3)
+
+    result = rotation.emit_due_steps(
+        steps,
+        now=10.0,
+        focused=True,
+        health=1.0,
+        damage_allowed=False,
+        tap=taps.append,
+        jitter=lambda _: 0.0,
+    )
+
+    assert result == "idle"
+    assert taps == []
+
+
+def test_scroll_is_not_repeated_until_its_duration_has_passed():
+    taps: list[str] = []
+    steps = [
+        step
+        for step in rotation.active_steps(rotation.load_profile(PROFILE), level=3)
+        if step.role == "buff"
+    ]
+
+    for now in (10.0, 10.5, 100.0, 309.0):
+        rotation.emit_due_steps(
+            steps, now=now, focused=True, tap=taps.append, jitter=lambda _: 0.0
+        )
+    assert taps == ["KEY_F5", "KEY_F7"]
+
+    rotation.emit_due_steps(
+        steps, now=311.0, focused=True, tap=taps.append, jitter=lambda _: 0.0
+    )
+    assert taps == ["KEY_F5", "KEY_F7", "KEY_F5"]
+
+
+def test_combat_on_keeps_a_running_scroll_timer(monkeypatch):
+    scene = _scene(monkeypatch, lambda _scene: None)
+    scene.engine = rotation.Engine(rotation.load_profile(PROFILE), 3)
+    for step in scene.engine.steps:
+        step.next_due = 10_000.0 if step.role == "buff" else 0.0
+    scene.engine.post("on")
+    with pytest.raises(_StopLoop):
+        scene.engine.run_session()
+
+    assert "KEY_F5" not in scene.taps["after"]
+    assert "KEY_F7" not in scene.taps["after"]
+    assert scene.taps["after"][:2] == ["KEY_1", "KEY_2"]

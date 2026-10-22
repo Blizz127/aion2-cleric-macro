@@ -4,10 +4,11 @@
   "min_level": 1,
   "max_level": 50,
   "source": {
-    "status": "Default hotbar observed live on Blizz at level 3 on 2026-10-17; locked E, Q, 3, and 4 slots mapped by their visible levels and Cleric progression",
+    "status": "Hotbar observed live on Blizz at level 8 on 2026-10-22: 1/2 unlocked, 3/4 locked (Lv.12/14), Q heal, E Chain of Torment, left/right mouse attacks, X auto-potion, F1 second potion, scrolls F3 Return, F5 Courage, F6 Speed (game auto-use on), F7 Benediction; identified against the Fextralife scroll icons",
     "client": "AION 2 Global 2.0.6.0 hotfix 1, Steam build 25800038",
     "skills_url": "https://aion2data.com/classes/cleric",
-    "priority_url": "https://aion2data.com/macros/cleric"
+    "priority_url": "https://aion2data.com/macros/cleric",
+    "scrolls_url": "https://aion2.wiki.fextralife.com/Scrolls"
   },
   "timing": {
     "hold_min": 0.03,
@@ -27,6 +28,16 @@
       "enabled": true
     },
     {
+      "name": "Second potion (F1 slot)",
+      "key": "KEY_F1",
+      "role": "potion",
+      "health_below": 0.25,
+      "interval": 15.0,
+      "retry_jitter": 1.0,
+      "activation_level": 1,
+      "enabled": false
+    },
+    {
       "name": "Radiant Recovery",
       "key": "KEY_3",
       "role": "heal",
@@ -44,6 +55,24 @@
       "interval": 30.0,
       "retry_jitter": 0.8,
       "activation_level": 7,
+      "enabled": true
+    },
+    {
+      "name": "Courage Scroll",
+      "key": "KEY_F5",
+      "role": "buff",
+      "interval": 300.0,
+      "retry_jitter": 5.0,
+      "activation_level": 1,
+      "enabled": true
+    },
+    {
+      "name": "Benediction Scroll",
+      "key": "KEY_F7",
+      "role": "buff",
+      "interval": 300.0,
+      "retry_jitter": 5.0,
+      "activation_level": 1,
       "enabled": true
     },
     {
@@ -67,6 +96,15 @@
     {
       "name": "Basic weapon attack",
       "key": "BTN_LEFT",
+      "role": "damage",
+      "interval": 1.0,
+      "retry_jitter": 0.0,
+      "activation_level": 1,
+      "enabled": true
+    },
+    {
+      "name": "Heavy attack (right click)",
+      "key": "BTN_RIGHT",
       "role": "damage",
       "interval": 1.0,
       "retry_jitter": 0.0,
@@ -128,5 +166,5 @@
       "enabled": true
     }
   ],
-  "manual": "Target selection, movement, quest choices, resurrection, and encounter mechanics stay manual. Potion and learned heals are health-gated from the visible HUD."
+  "manual": "Target selection, movement, quest choices, resurrection, and encounter mechanics stay manual. Potion and learned heals are health-gated from the visible HUD. Scrolls fire only while fighting a confirmed target, once per 300 s. F3 Return Scroll is never pressed; F6 Speed Scroll is left to the game's own auto-use."
 }
